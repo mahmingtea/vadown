@@ -1,3 +1,5 @@
+import { Checkbox } from "./ui/checkbox";
+
 type Props = {
     item: { index: number, title: string, duration?: number };
     selectedItems: number[];
@@ -10,11 +12,10 @@ export default function PlaylistItem({ item, selectedItems, setSelectedItems, fo
             key={item.index}
             className={`flex items-center gap-3 p-2 rounded-md cursor-pointer text-sm transition-colors ${selectedItems.includes(item.index) ? "bg-zinc-800/80" : "hover:bg-zinc-800/40"}`}
         >
-            <input
-                type="checkbox"
+            <Checkbox
                 checked={selectedItems.includes(item.index)}
-                onChange={(e) => {
-                    if (e.target.checked) setSelectedItems(prev => [...prev, item.index]);
+                onCheckedChange={(checked) => {
+                    if (checked) setSelectedItems(prev => [...prev, item.index]);
                     else setSelectedItems(prev => prev.filter(i => i !== item.index));
                 }}
                 className="rounded border-zinc-600 bg-zinc-900"
