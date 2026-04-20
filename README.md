@@ -14,7 +14,7 @@ A modern, fast, and lightweight media downloader desktop application built with 
 Before you begin, ensure you have the following installed:
 
 1. [Rust and Cargo](https://www.rust-lang.org/tools/install)
-2. [Bun](https://bun.sh/) (JavaScript runtime and package manager)
+2. Node.js and a package manager (npm, yarn, pnpm, or [Bun](https://bun.sh/))
 3. [Tauri Prerequisites](https://v2.tauri.app/start/prerequisites/) for your operating system.
 
 ### External Binaries Configuration
@@ -47,9 +47,19 @@ Refer to the [Tauri Sidecar Documentation](https://v2.tauri.app/learn/sidecar/) 
    cd vadown
    ```
 
-2. **Install frontend dependencies** via Bun:
+2. **Install frontend dependencies**:
    ```bash
+   # Using bun
    bun install
+   
+   # Or using npm
+   npm install
+
+   # Or using yarn
+   yarn install
+
+   # Or using pnpm
+   pnpm install
    ```
 
 3. **Install external binaries**:
@@ -57,7 +67,17 @@ Refer to the [Tauri Sidecar Documentation](https://v2.tauri.app/learn/sidecar/) 
 
 4. **Start the development server**:
    ```bash
+   # Using bun
    bun run tauri dev
+
+   # Or using npm
+   npm run tauri dev
+
+   # Or using yarn
+   yarn tauri dev
+
+   # Or using pnpm
+   pnpm tauri dev
    ```
 
 ## How to Build
@@ -65,7 +85,17 @@ Refer to the [Tauri Sidecar Documentation](https://v2.tauri.app/learn/sidecar/) 
 To build an optimized release bundle (e.g., `.dmg`, `.app`, `.exe`, or `.deb`) for your operating system:
 
 ```bash
+# Using bun
 bun run tauri build
+
+# Or using npm
+npm run tauri build
+
+# Or using yarn
+yarn tauri build
+
+# Or using pnpm
+pnpm tauri build
 ```
 
 Once the build is complete, your installer and executable will be available inside the `src-tauri/target/release/bundle/` directory.
