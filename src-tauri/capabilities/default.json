@@ -33,16 +33,6 @@
           "name": "bin/yt-dlp",
           "sidecar": true,
           "args": true
-        },
-        {
-          "name": "bin/ffmpeg",
-          "sidecar": true,
-          "args": true
-        },
-        {
-          "name": "bin/ffprobe",
-          "sidecar": true,
-          "args": true
         }
       ]
     },

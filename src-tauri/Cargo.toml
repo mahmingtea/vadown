@@ -1,6 +1,6 @@
 [package]
 name = "vadown"
-version = "0.0.1"
+version = "0.2.0"
 description = "A simple yet powerful video and audio downloader"
 authors = ["mahmingtea"]
 edition = "2021"
