@@ -1,0 +1,86 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: 'macos-latest'
+            os_name: 'mac'
+            args: '--target aarch64-apple-darwin' # Compiles arm64 dmg/app
+          - platform: 'windows-latest'
+            os_name: 'windows'
+            args: '' # Compiles x64 exe/msi
+          - platform: 'ubuntu-latest'
+            os_name: 'linux'
+            args: '' # Compiles x64 deb/AppImage
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Rust setup
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin' || '' }}
+
+      - name: Install dependencies (Ubuntu only)
+        if: matrix.platform == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - name: Install frontend dependencies
+        run: bun install
+
+      # Securely download sidecars from your private Cloudflare R2 bucket
+      - name: Download Sidecars from R2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          R2_ENDPOINT_URL: 'https://7d577157698d8840166eb7eae142eb6d.r2.cloudflarestorage.com'
+          BUCKET_NAME: 'my-bucket'
+        shell: bash
+        run: |
+          mkdir -p src-tauri/bin
+          
+          echo "Downloading sidecars for ${{ matrix.os_name }}..."
+          aws s3 cp --endpoint-url "$R2_ENDPOINT_URL" "s3://$BUCKET_NAME/vadown-sidecars/${{ matrix.os_name }}.zip" ./temp.zip
+          
+          echo "Extracting sidecars..."
+          if [ "${{ matrix.os_name }}" = "windows" ]; then
+            # Windows runner uses tar internally for extracting zip in bash shell
+            tar -xf ./temp.zip -C src-tauri/bin/
+          else
+            unzip -q -o ./temp.zip -d src-tauri/bin/
+            chmod +x src-tauri/bin/*
+          fi
+          
+          rm -f ./temp.zip
+          
+          echo "Contents of src-tauri/bin/:"
+          ls -la src-tauri/bin/
+
+      - name: Build and package Tauri app
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: 'VADown v__VERSION__'
+          args: ${{ matrix.args }}
