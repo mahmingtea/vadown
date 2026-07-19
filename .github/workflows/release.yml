@@ -26,7 +26,7 @@ jobs:
     runs-on: ${{ matrix.platform }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Install Bun
         uses: oven-sh/setup-bun@v2
@@ -64,8 +64,8 @@ jobs:
           
           echo "Extracting sidecars..."
           if [ "${{ matrix.os_name }}" = "windows" ]; then
-            # Windows runner uses tar internally for extracting zip in bash shell
-            tar -xf ./temp.zip -C src-tauri/bin/
+            # Use Windows system tar.exe (bsdtar) to extract the zip file
+            /c/Windows/System32/tar.exe -xf ./temp.zip -C src-tauri/bin/
           else
             unzip -q -o ./temp.zip -d src-tauri/bin/
             chmod +x src-tauri/bin/*
