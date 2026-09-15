@@ -25,12 +25,37 @@ export const needsYouTubeCookies = (stderr: string): boolean => {
         (s.includes("403") && s.includes("youtube"))
     );
 };
+export type SupportedBrowser =
+    | "chrome"
+    | "safari"
+    | "brave"
+    | "firefox"
+    | "edge"
+    | "chromium"
+    | "opera";
+
+export const SUPPORTED_BROWSERS: { id: SupportedBrowser; name: string }[] = [
+    { id: "chrome", name: "Google Chrome" },
+    { id: "safari", name: "Safari" },
+    { id: "brave", name: "Brave" },
+    { id: "firefox", name: "Firefox" },
+    { id: "edge", name: "Microsoft Edge" },
+    { id: "chromium", name: "Chromium" },
+    { id: "opera", name: "Opera" },
+];
+
+export const getBrowserDisplayName = (browser: SupportedBrowser): string => {
+    const found = SUPPORTED_BROWSERS.find((b) => b.id === browser);
+    return found ? found.name : browser;
+};
+
 export const getBrowserFlags = (
     url: string,
     useBrowserContext: boolean,
     bearerToken: string,
     referer: string,
     withCookies = false,
+    browser: SupportedBrowser = "chrome",
 ): string[] => {
     if (!useBrowserContext) return [];
 
@@ -45,13 +70,10 @@ export const getBrowserFlags = (
         "--add-header", "Accept-Language:en-US,en;q=0.9",
         "--no-check-certificates",
     ];
-    if (yt) {
-        if (withCookies) {
-            flags.push("--cookies-from-browser", "chrome");
-        }
-    } else {
-        flags.push("--cookies-from-browser", "chrome");
+    if (withCookies) {
+        flags.push("--cookies-from-browser", browser);
     }
+
 
     if (yt) {
         if (withCookies) {

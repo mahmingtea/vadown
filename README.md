@@ -37,7 +37,7 @@ Tauri requires external binaries (sidecars) to have a target triple appended to 
 - `ffmpeg-x86_64-pc-windows-msvc.exe`
 - `ffprobe-x86_64-pc-windows-msvc.exe`
 
-Refer to the [Tauri Sidecar Documentation](https://v2.tauri.app/learn/sidecar/) for specifics on target triples for Linux and Intel Macs.
+Refer to the [Tauri Sidecar Documentation](https://v2.tauri.app/learn/sidecar/) for specifics on target triples for Linux.
 
 ## How to Run Locally
 

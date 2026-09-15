@@ -7,25 +7,29 @@
   ],
   "permissions": [
     "core:default",
+    "updater:default",
+    "process:default",
     "shell:default",
+    "shell:allow-kill",
     {
-      "identifier": "shell:allow-execute",
+      "identifier": "fs:allow-read-dir",
       "allow": [
         {
-          "name": "sh",
-          "cmd": "sh",
-          "args": [
-            "-c",
-            {
-              "validator": ".*"
-            }
-          ]
+          "path": "$DOWNLOAD"
+        },
+        {
+          "path": "$DOWNLOAD/**"
         }
       ]
     },
-    "shell:allow-kill",
-    "fs:allow-read-dir",
-    "fs:allow-remove",
+    {
+      "identifier": "fs:allow-remove",
+      "allow": [
+        {
+          "path": "$DOWNLOAD/**"
+        }
+      ]
+    },
     {
       "identifier": "shell:allow-spawn",
       "allow": [

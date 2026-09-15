@@ -50,7 +50,7 @@ export default function ProgressCard({ status, currentLog, duration, elapsedTime
                         </Badge>
                     )}
 
-                    {status === "downloading" && (
+                    {(status === "downloading" || status === "analyzing") && (
                         <Button
                             variant="ghost"
                             size="sm"
@@ -63,7 +63,7 @@ export default function ProgressCard({ status, currentLog, duration, elapsedTime
 
                     {status === "success" || status === "error" ? (
                         <Button onClick={handleNewDownload} size="sm" variant="outline" className="h-6 px-3 shrink-0">
-                            Clear
+                            Dismiss
                         </Button>
                     ) : (
                         <Badge variant="secondary" className="shrink-0 capitalize">
@@ -79,7 +79,7 @@ export default function ProgressCard({ status, currentLog, duration, elapsedTime
                     )}
                 </div>
 
-                <Progress value={progress} className="h-2 transition-all duration-300" />
+                <Progress value={status === "analyzing" ? 0 : progress} className="h-2 transition-all duration-300" />
             </CardContent>
         </Card>)
 }
