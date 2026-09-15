@@ -9,6 +9,26 @@ A modern, fast, and lightweight media downloader desktop application built with 
 - **Robust Downloading**: Uses `yt-dlp` to download content from a wide range of supported media sites.
 - **Media Processing**: Uses `ffmpeg` for post-processing and format conversions.
 
+## 📥 Download & Installation
+
+Pre-built packages for macOS, Windows, and Linux are available on the **[Releases](https://github.com/mahmingtea/vadown/releases/latest)** page:
+
+- 🍎 **macOS (Apple Silicon M1/M2/M3/M4)**: Download the **`.dmg`** file (e.g., `vadown_*_aarch64.dmg`).
+- 🪟 **Windows (64-bit)**: Download the **`.exe`** installer (e.g., `vadown_*_x64-setup.exe`) or the **`.msi`** package.
+- 🐧 **Linux (64-bit)**: Download the **`.AppImage`** or **`.deb`** package.
+
+### 🍎 macOS Installation Note
+Because VADown is an open-source tool without a paid Apple Developer certificate, macOS Gatekeeper may display:
+> *"vadown is damaged and can't be opened. You should move it to the Bin."*
+
+**To open it in seconds:**
+1. Open the `.dmg` and drag `vadown.app` into your `/Applications` folder.
+2. Open **Terminal** and run:
+   ```bash
+   xattr -cr /Applications/vadown.app
+   ```
+3. Open VADown normally.
+
 ## Prerequisites
 
 Before you begin, ensure you have the following installed:

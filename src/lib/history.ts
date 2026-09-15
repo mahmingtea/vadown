@@ -94,13 +94,29 @@ export function addHistoryItem(
   }
   const current = loadHistory();
 
+  const isSameVariant = (a: DownloadHistoryItem, b: typeof item) => {
+    if (a.url !== b.url || a.format !== b.format || a.isPlaylist !== b.isPlaylist) {
+      return false;
+    }
+    if (b.isPlaylist) {
+      return a.playlistQuality === b.playlistQuality;
+    }
+    const aQual = a.quality || "";
+    const bQual = b.quality || "";
+    if (aQual || bQual) {
+      return aQual === bQual;
+    }
+    if (a.selectedFormat && b.selectedFormat) {
+      return a.selectedFormat === b.selectedFormat;
+    }
+    return true;
+  };
+
   // If this is a redownload or re-fetch of an existing item:
-  // Find by existing id, or matching same url + format + playlist mode
+  // Find by existing id, or matching same filePath, or matching same variant (url + format + quality/playlistQuality)
   const existingIndex = item.id
     ? current.findIndex((i) => i.id === item.id)
-    : current.findIndex(
-        (i) => i.url === item.url && i.format === item.format && i.isPlaylist === item.isPlaylist
-      );
+    : current.findIndex((i) => i.filePath === item.filePath || isSameVariant(i, item));
 
   if (existingIndex !== -1) {
     const existing = current[existingIndex];
@@ -129,7 +145,7 @@ export function addHistoryItem(
   };
 
   // Prepend so latest downloads appear at the top
-  const updated = [newItem, ...current.filter((i) => i.filePath !== newItem.filePath && i.url !== newItem.url)];
+  const updated = [newItem, ...current.filter((i) => i.filePath !== newItem.filePath && i.id !== newItem.id)];
   saveHistory(updated);
   return newItem;
 }

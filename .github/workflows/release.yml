@@ -86,3 +86,32 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: 'VADown v__VERSION__'
           args: ${{ matrix.args }}
+          releaseBody: |
+            ### 📦 Download Assets by Platform
+
+            Choose the appropriate installer for your operating system from the **Assets** section below:
+
+            - 🍎 **macOS (Apple Silicon M1 / M2 / M3 / M4)**:
+              - Download the **`.dmg`** file (e.g. `vadown_*_aarch64.dmg`).
+              - Open the `.dmg` and drag **vadown.app** into your **Applications** folder.
+
+            - 🪟 **Windows (64-bit)**:
+              - Download the **`.exe`** installer (e.g. `vadown_*_x64-setup.exe`) or the **`.msi`** package.
+
+            - 🐧 **Linux (64-bit)**:
+              - Download the **`.AppImage`** or **`.deb`** package (e.g. `vadown_*_amd64.deb`).
+
+            ---
+
+            ### 🍎 macOS First-Launch Note (Gatekeeper)
+            Because VADown is an open-source app distributed outside the Mac App Store without an expensive Apple Developer certificate, macOS Gatekeeper may show:
+            > *"vadown is damaged and can't be opened. You should move it to the Bin."*
+
+            **To open it in seconds:**
+            1. Drag **vadown.app** from the `.dmg` into your **Applications** folder.
+            2. Open your **Terminal** app and run:
+               ```bash
+               xattr -cr /Applications/vadown.app
+               ```
+            3. Launch VADown normally from Applications or Spotlight!
+
