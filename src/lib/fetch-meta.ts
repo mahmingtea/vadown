@@ -256,6 +256,8 @@ export const fetchMetadata = async (props: Props) => {
             setCurrentLog(`Cookie error: close ${browserName} completely and try again.`);
         } else if (cookieErr.includes("sign in") || cookieErr.includes("private")) {
             setCurrentLog("This video is private or requires a Google account login.");
+        } else if (cookieErr.includes("javascript runtime") || cookieErr.includes("no supported javascript")) {
+            setCurrentLog("JavaScript runtime required for YouTube. Check your internet connection to complete setup.");
         } else {
             setCurrentLog("Analysis failed even with cookies. The video may be unavailable.");
         }
@@ -270,6 +272,8 @@ export const fetchMetadata = async (props: Props) => {
         setCurrentLog("Access denied (403): check your token or referer.");
     } else if (e.includes("private") || e.includes("login")) {
         setCurrentLog("This content is private or requires login.");
+    } else if (e.includes("javascript runtime") || e.includes("no supported javascript")) {
+        setCurrentLog("JavaScript runtime required for YouTube. Check your internet connection to complete setup.");
     } else if (err1.trim()) {
         setCurrentLog(err1.trim().slice(0, 150));
     } else {

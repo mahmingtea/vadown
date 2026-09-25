@@ -672,10 +672,15 @@ export const startDownload = async ({
             }
 
             setStatus("error");
-            setCurrentLog(
-                `Exit code ${exitCode} — ffmpeg dir: "${ffmpegDir || "not resolved"}". ` +
-                `Ensure ffmpeg & ffprobe are in src-tauri/bin/ and listed in tauri.conf.json externalBin.`
-            );
+            const errLower = stderrOutput.toLowerCase();
+            if (errLower.includes("javascript runtime") || errLower.includes("no supported javascript")) {
+                setCurrentLog("JavaScript runtime required for YouTube extraction. Check your internet connection to complete setup.");
+            } else {
+                setCurrentLog(
+                    `Exit code ${exitCode} — ffmpeg dir: "${ffmpegDir || "not resolved"}". ` +
+                    `Ensure ffmpeg & ffprobe are in src-tauri/bin/ and listed in tauri.conf.json externalBin.`
+                );
+            }
         });
     } catch (err) {
         console.error(err);

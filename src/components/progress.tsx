@@ -3,8 +3,7 @@ import { Card, CardContent } from "./ui/card";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Progress } from "./ui/progress";
-import { downloadDir } from "@tauri-apps/api/path";
-import { openPath } from '@tauri-apps/plugin-opener';
+import { invoke } from "@tauri-apps/api/core";
 
 type Props = {
     status: "idle" | "analyzing" | "downloading" | "success" | "error";
@@ -20,8 +19,7 @@ type Props = {
 export default function ProgressCard({ status, currentLog, duration, elapsedTime, progress, isPlaylist, handleStop, handleNewDownload, formatDuration }: Props) {
     const handleOpenDownloads = async () => {
         try {
-            const downloadDirPath = await downloadDir();
-            await openPath(downloadDirPath);
+            await invoke("open_download_folder");
         } catch (error) {
             console.error("Failed to open directory:", error);
         }

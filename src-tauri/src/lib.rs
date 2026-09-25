@@ -4,6 +4,19 @@ use tauri::{Emitter, Manager};
 
 static ACTIVE_DOWNLOAD_PIDS: Mutex<Vec<u32>> = Mutex::new(Vec::new());
 
+fn prevent_cmd_window(cmd: &mut std::process::Command) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = cmd;
+    }
+}
+
 #[tauri::command]
 fn kill_process(pid: u32) -> Result<(), String> {
     let mut pids_to_kill = Vec::new();
@@ -49,7 +62,9 @@ fn kill_process(pid: u32) -> Result<(), String> {
         #[cfg(windows)]
         {
             use std::process::Command;
-            let _ = Command::new("taskkill")
+            let mut cmd = Command::new("taskkill");
+            prevent_cmd_window(&mut cmd);
+            let _ = cmd
                 .args(["/F", "/T", "/PID", &p.to_string()])
                 .status();
         }
@@ -245,7 +260,9 @@ pub struct YtDlpUpdateInfo {
 async fn check_ytdlp_update(app: tauri::AppHandle) -> Result<YtDlpUpdateInfo, String> {
     let ytdlp_path = resolve_active_ytdlp_path(&app)?;
 
-    let output = std::process::Command::new(&ytdlp_path)
+    let mut cmd = std::process::Command::new(&ytdlp_path);
+    prevent_cmd_window(&mut cmd);
+    let output = cmd
         .arg("--version")
         .output()
         .map_err(|e| format!("Failed to check current yt-dlp version: {e}"))?;
@@ -332,13 +349,303 @@ async fn install_ytdlp_update(app: tauri::AppHandle) -> Result<String, String> {
 
     std::fs::rename(&tmp_path, &dest_path).map_err(|e| format!("Failed to replace binary: {e}"))?;
 
-    let verify = std::process::Command::new(&dest_path)
+    let mut cmd = std::process::Command::new(&dest_path);
+    prevent_cmd_window(&mut cmd);
+    let verify = cmd
         .arg("--version")
         .output()
         .map_err(|e| format!("Failed to execute updated binary: {e}"))?;
 
     let new_version = String::from_utf8_lossy(&verify.stdout).trim().to_string();
     Ok(new_version)
+}
+
+fn find_js_runtime(app: &tauri::AppHandle) -> Option<(String, std::path::PathBuf)> {
+    let (qjs_name, deno_name, node_name, bun_name) = if cfg!(windows) {
+        ("qjs.exe", "deno.exe", "node.exe", "bun.exe")
+    } else {
+        ("qjs", "deno", "node", "bun")
+    };
+
+    // 1. Check in app_data_dir/bin/ (dynamically downloaded or installed runtimes)
+    if let Ok(app_data) = app.path().app_data_dir() {
+        let bin_dir = app_data.join("bin");
+        let qjs_path = bin_dir.join(qjs_name);
+        if qjs_path.exists() {
+            return Some(("quickjs".to_string(), qjs_path));
+        }
+        let deno_path = bin_dir.join(deno_name);
+        if deno_path.exists() {
+            return Some(("deno".to_string(), deno_path));
+        }
+        let node_path = bin_dir.join(node_name);
+        if node_path.exists() {
+            return Some(("node".to_string(), node_path));
+        }
+        let bun_path = bin_dir.join(bun_name);
+        if bun_path.exists() {
+            return Some(("bun".to_string(), bun_path));
+        }
+    }
+
+    // 2. Check beside running executable (Production bundled mode)
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(exe_dir) = exe_path.parent() {
+            let qjs_path = exe_dir.join(qjs_name);
+            if qjs_path.exists() {
+                return Some(("quickjs".to_string(), qjs_path));
+            }
+            let deno_path = exe_dir.join(deno_name);
+            if deno_path.exists() {
+                return Some(("deno".to_string(), deno_path));
+            }
+            let node_path = exe_dir.join(node_name);
+            if node_path.exists() {
+                return Some(("node".to_string(), node_path));
+            }
+
+            if let Some(parent) = exe_dir.parent() {
+                let res_dir = parent.join("Resources");
+                if res_dir.join(qjs_name).exists() {
+                    return Some(("quickjs".to_string(), res_dir.join(qjs_name)));
+                }
+                if res_dir.join(deno_name).exists() {
+                    return Some(("deno".to_string(), res_dir.join(deno_name)));
+                }
+                if res_dir.join(node_name).exists() {
+                    return Some(("node".to_string(), res_dir.join(node_name)));
+                }
+            }
+        }
+    }
+
+    // 3. Check well-known system paths (especially on Windows where PATH might not be updated in desktop shortcuts)
+    #[cfg(windows)]
+    {
+        let win_candidates = [
+            ("node", r"C:\Program Files\nodejs\node.exe"),
+            ("node", r"C:\Program Files (x86)\nodejs\node.exe"),
+        ];
+        for (name, path_str) in win_candidates {
+            let p = std::path::PathBuf::from(path_str);
+            if p.exists() {
+                return Some((name.to_string(), p));
+            }
+        }
+
+        if let Ok(local_appdata) = std::env::var("LOCALAPPDATA") {
+            let p = std::path::PathBuf::from(&local_appdata).join("Programs").join("node.exe");
+            if p.exists() {
+                return Some(("node".to_string(), p));
+            }
+            let p2 = std::path::PathBuf::from(&local_appdata).join("Programs").join("nodejs").join("node.exe");
+            if p2.exists() {
+                return Some(("node".to_string(), p2));
+            }
+        }
+        if let Ok(appdata) = std::env::var("APPDATA") {
+            let p = std::path::PathBuf::from(&appdata).join("npm").join("node.exe");
+            if p.exists() {
+                return Some(("node".to_string(), p));
+            }
+        }
+        if let Ok(userprofile) = std::env::var("USERPROFILE") {
+            let deno_p = std::path::PathBuf::from(&userprofile).join(".deno").join("bin").join("deno.exe");
+            if deno_p.exists() {
+                return Some(("deno".to_string(), deno_p));
+            }
+            let bun_p = std::path::PathBuf::from(&userprofile).join(".bun").join("bin").join("bun.exe");
+            if bun_p.exists() {
+                return Some(("bun".to_string(), bun_p));
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    {
+        let unix_candidates = [
+            ("deno", "/opt/homebrew/bin/deno"),
+            ("deno", "/usr/local/bin/deno"),
+            ("node", "/opt/homebrew/bin/node"),
+            ("node", "/usr/local/bin/node"),
+            ("node", "/usr/bin/node"),
+            ("bun", "/opt/homebrew/bin/bun"),
+            ("bun", "/usr/local/bin/bun"),
+        ];
+        for (name, path_str) in unix_candidates {
+            let p = std::path::PathBuf::from(path_str);
+            if p.exists() {
+                return Some((name.to_string(), p));
+            }
+        }
+        if let Ok(home) = std::env::var("HOME") {
+            let deno_p = std::path::PathBuf::from(&home).join(".deno").join("bin").join("deno");
+            if deno_p.exists() {
+                return Some(("deno".to_string(), deno_p));
+            }
+            let bun_p = std::path::PathBuf::from(&home).join(".bun").join("bin").join("bun");
+            if bun_p.exists() {
+                return Some(("bun".to_string(), bun_p));
+            }
+        }
+    }
+
+    // 4. Check if available in system PATH
+    if let Ok(path_var) = std::env::var("PATH") {
+        let separator = if cfg!(windows) { ';' } else { ':' };
+        for dir in path_var.split(separator) {
+            let dir_buf = std::path::PathBuf::from(dir);
+            for (name, exe) in [
+                ("deno", deno_name),
+                ("node", node_name),
+                ("quickjs", qjs_name),
+                ("bun", bun_name),
+            ] {
+                let candidate = dir_buf.join(exe);
+                if candidate.exists() {
+                    return Some((name.to_string(), candidate));
+                }
+            }
+        }
+    }
+
+    None
+}
+
+async fn ensure_js_runtime(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    if let Some((_, path)) = find_js_runtime(app) {
+        return Ok(path);
+    }
+
+    let app_data = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let bin_dir = app_data.join("bin");
+    std::fs::create_dir_all(&bin_dir).map_err(|e| e.to_string())?;
+
+    let (asset_name, dest_name) = if cfg!(windows) {
+        ("qjs-windows-x86_64.exe", "qjs.exe")
+    } else if cfg!(target_os = "macos") {
+        if cfg!(target_arch = "aarch64") {
+            ("qjs-darwin-arm64", "qjs")
+        } else {
+            ("qjs-darwin-x86_64", "qjs")
+        }
+    } else {
+        ("qjs-linux-x86_64", "qjs")
+    };
+
+    let download_url = format!("https://github.com/quickjs-ng/quickjs/releases/download/v0.17.0/{asset_name}");
+
+    let client = reqwest::Client::builder()
+        .user_agent("VADown-RuntimeInstaller")
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let res = client
+        .get(&download_url)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to download JavaScript runtime: {e}"))?;
+
+    if !res.status().is_success() {
+        return Err(format!("JavaScript runtime download failed with status: {}", res.status()));
+    }
+
+    let bytes = res.bytes().await.map_err(|e| format!("Failed to read runtime asset bytes: {e}"))?;
+    let dest_path = bin_dir.join(dest_name);
+    let tmp_path = bin_dir.join(format!("{dest_name}.tmp"));
+
+    std::fs::write(&tmp_path, &bytes).map_err(|e| format!("Failed to write runtime binary: {e}"))?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&tmp_path).map_err(|e| e.to_string())?.permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&tmp_path, perms).map_err(|e| e.to_string())?;
+    }
+
+    std::fs::rename(&tmp_path, &dest_path).map_err(|e| format!("Failed to replace runtime binary: {e}"))?;
+
+    Ok(dest_path)
+}
+
+fn get_js_runtime_args(app: &tauri::AppHandle) -> Vec<String> {
+    let mut runtime_args = Vec::new();
+
+    if let Some((name, path)) = find_js_runtime(app) {
+        runtime_args.push("--js-runtimes".to_string());
+        runtime_args.push(format!("{}:{}", name, path.to_string_lossy()));
+    }
+
+    // Always enable other supported runtimes so yt-dlp checks PATH as well
+    runtime_args.push("--js-runtimes".to_string());
+    runtime_args.push("node".to_string());
+    runtime_args.push("--js-runtimes".to_string());
+    runtime_args.push("quickjs".to_string());
+    runtime_args.push("--js-runtimes".to_string());
+    runtime_args.push("bun".to_string());
+
+    runtime_args
+}
+
+fn configure_cmd_env(cmd: &mut std::process::Command, app: &tauri::AppHandle) {
+    prevent_cmd_window(cmd);
+    let mut extra_dirs = Vec::new();
+
+    // 1. Add app_data_dir/bin (where dynamic yt-dlp and qjs live)
+    if let Ok(app_data) = app.path().app_data_dir() {
+        let bin_dir = app_data.join("bin");
+        if bin_dir.exists() {
+            extra_dirs.push(bin_dir);
+        }
+    }
+
+    // 2. Add exe_dir
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(exe_dir) = exe_path.parent() {
+            extra_dirs.push(exe_dir.to_path_buf());
+        }
+    }
+
+    // 3. Add well-known dirs on Windows
+    #[cfg(windows)]
+    {
+        let win_dirs = [
+            r"C:\Program Files\nodejs",
+            r"C:\Program Files (x86)\nodejs",
+        ];
+        for d in win_dirs {
+            let p = std::path::PathBuf::from(d);
+            if p.exists() {
+                extra_dirs.push(p);
+            }
+        }
+        if let Ok(userprofile) = std::env::var("USERPROFILE") {
+            let deno_dir = std::path::PathBuf::from(&userprofile).join(".deno").join("bin");
+            if deno_dir.exists() {
+                extra_dirs.push(deno_dir);
+            }
+        }
+    }
+
+    if !extra_dirs.is_empty() {
+        let current_path = std::env::var("PATH").unwrap_or_default();
+        let separator = if cfg!(windows) { ";" } else { ":" };
+        let mut new_path_parts = Vec::new();
+        for dir in extra_dirs {
+            new_path_parts.push(dir.to_string_lossy().to_string());
+        }
+        if !current_path.is_empty() {
+            new_path_parts.push(current_path);
+        }
+        cmd.env("PATH", new_path_parts.join(separator));
+    }
+}
+
+#[tauri::command]
+async fn setup_js_runtime(app: tauri::AppHandle) -> Result<String, String> {
+    let path = ensure_js_runtime(&app).await?;
+    Ok(path.to_string_lossy().to_string())
 }
 
 #[derive(serde::Serialize)]
@@ -350,10 +657,19 @@ pub struct YtDlpOutput {
 
 #[tauri::command]
 async fn run_ytdlp_dump(app: tauri::AppHandle, args: Vec<String>) -> Result<YtDlpOutput, String> {
+    if find_js_runtime(&app).is_none() {
+        let _ = ensure_js_runtime(&app).await;
+    }
+
     let ytdlp_path = resolve_active_ytdlp_path(&app)?;
+    let runtime_args = get_js_runtime_args(&app);
+    let app_handle = app.clone();
+
     tauri::async_runtime::spawn_blocking(move || {
         let mut cmd = std::process::Command::new(ytdlp_path);
-        cmd.args(args)
+        configure_cmd_env(&mut cmd, &app_handle);
+        cmd.args(runtime_args)
+            .args(args)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
 
@@ -395,8 +711,12 @@ fn spawn_ytdlp_download(
     event_channel: String,
 ) -> Result<u32, String> {
     let ytdlp_path = resolve_active_ytdlp_path(&app)?;
+    let runtime_args = get_js_runtime_args(&app);
+
     let mut cmd = std::process::Command::new(ytdlp_path);
-    cmd.args(args)
+    configure_cmd_env(&mut cmd, &app);
+    cmd.args(runtime_args)
+        .args(args)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
 
@@ -491,7 +811,8 @@ fn check_file_status(path: String) -> FileStatus {
 
 #[tauri::command]
 fn reveal_in_folder(path: String) -> Result<(), String> {
-    let p = std::path::Path::new(&path);
+    let clean_path = path.trim().trim_end_matches(['/', '\\']);
+    let p = std::path::Path::new(clean_path);
     if !p.exists() {
         return Err("File or folder does not exist on disk".into());
     }
@@ -507,15 +828,68 @@ fn reveal_in_folder(path: String) -> Result<(), String> {
 
     #[cfg(target_os = "windows")]
     {
-        std::process::Command::new("explorer")
-            .arg(format!("/select,\"{}\"", p.display()))
-            .spawn()
+        let mut cmd = std::process::Command::new("explorer");
+        prevent_cmd_window(&mut cmd);
+        if p.is_dir() {
+            cmd.arg(p);
+        } else {
+            cmd.arg("/select,").arg(p);
+        }
+        cmd.spawn()
             .map_err(|e| format!("Failed to reveal in Explorer: {e}"))?;
     }
 
     #[cfg(target_os = "linux")]
     {
         let target = if p.is_dir() { p } else { p.parent().unwrap_or(p) };
+        std::process::Command::new("xdg-open")
+            .arg(target)
+            .spawn()
+            .map_err(|e| format!("Failed to open folder: {e}"))?;
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+fn open_download_folder(app: tauri::AppHandle, path: Option<String>) -> Result<(), String> {
+    let target_dir = if let Some(custom_path) = path.filter(|s| !s.trim().is_empty()) {
+        let clean = custom_path.trim().trim_end_matches(['/', '\\']);
+        let p = std::path::PathBuf::from(clean);
+        if p.exists() {
+            if p.is_dir() {
+                p
+            } else {
+                p.parent().map(|parent| parent.to_path_buf()).unwrap_or(p)
+            }
+        } else {
+            app.path().download_dir().map_err(|e| e.to_string())?
+        }
+    } else {
+        app.path().download_dir().map_err(|e| e.to_string())?
+    };
+
+    let canonical = std::fs::canonicalize(&target_dir).unwrap_or(target_dir);
+
+    #[cfg(target_os = "windows")]
+    {
+        let mut cmd = std::process::Command::new("explorer");
+        prevent_cmd_window(&mut cmd);
+        cmd.arg(&canonical);
+        cmd.spawn().map_err(|e| format!("Failed to open Explorer: {e}"))?;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(&canonical)
+            .spawn()
+            .map_err(|e| format!("Failed to open in Finder: {e}"))?;
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let target = if canonical.is_dir() { &canonical } else { canonical.parent().unwrap_or(&canonical) };
         std::process::Command::new("xdg-open")
             .arg(target)
             .spawn()
@@ -643,6 +1017,15 @@ fn delete_empty_dir_if_exists(app: tauri::AppHandle, path: String) -> Result<boo
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .setup(|app| {
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                if find_js_runtime(&handle).is_none() {
+                    let _ = ensure_js_runtime(&handle).await;
+                }
+            });
+            Ok(())
+        })
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_opener::init())
@@ -653,10 +1036,12 @@ pub fn run() {
             get_exe_dir,
             check_ytdlp_update,
             install_ytdlp_update,
+            setup_js_runtime,
             run_ytdlp_dump,
             spawn_ytdlp_download,
             check_file_status,
             reveal_in_folder,
+            open_download_folder,
             delete_file_from_disk,
             delete_empty_dir_if_exists
         ])
