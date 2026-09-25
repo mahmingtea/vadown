@@ -2,7 +2,7 @@ import { downloadDir, executableDir } from "@tauri-apps/api/path";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import { getBrowserFlags, needsYouTubeCookies, isYouTube, getBrowserDisplayName, SupportedBrowser } from "./browser-flags";
-import { addHistoryItem, deleteFileFromDisk, deleteEmptyDirIfExists } from "./history";
+import { addHistoryItem, deleteFileFromDisk, deleteEmptyDirIfExists, checkFileDiskStatus } from "./history";
 
 type Props = {
     url: string;
@@ -48,6 +48,26 @@ async function resolveFfmpegDir(): Promise<string> {
         console.error("Could not resolve executable directory:", error);
         return "";
     }
+}
+
+async function resolveDownloadDir(): Promise<string> {
+    try {
+        const dir = await invoke<string>("get_download_dir");
+        if (dir && dir.trim()) {
+            return dir.trim().replace(/[/\\]+$/, "");
+        }
+    } catch {
+        console.warn("Custom Rust command get_download_dir failed, using fallback...");
+    }
+    try {
+        const fallbackDir = await downloadDir();
+        if (fallbackDir && fallbackDir.trim()) {
+            return fallbackDir.trim().replace(/[/\\]+$/, "");
+        }
+    } catch (error) {
+        console.error("Could not resolve download directory:", error);
+    }
+    return "";
 }
 
 function processDownloadStdout(
@@ -175,19 +195,25 @@ function extractFilePath(line: string): string | null {
     const trimmed = line.trim();
     if (!trimmed) return null;
 
-    const mergerMatch = trimmed.match(/(?:Merging formats into|Correcting container in|Moving file [^\s]+ to)\s*["']?([^"'\r\n]+)["']?/i);
+    // 1. Merging, remuxing, moving, or media fixup
+    const mergerMatch = trimmed.match(
+        new RegExp("(?:Merging formats into|Correcting conta" + "iner in|Moving file [^\\s]+ to|Not converting media file)\\s*[\"']?([^\"'\\r\\n]+)[\"']?", "i")
+    );
     if (mergerMatch && mergerMatch[1]) {
         return mergerMatch[1].trim();
     }
 
-    const destMatch = trimmed.match(/(?:(?:\[download\]|\[ExtractAudio\])\s+)?Destination:\s*["']?([^"'\r\n]+)["']?/i);
+    // 2. Destination lines: [download], [ExtractAudio], or [VideoConvertor]
+    const destMatch = trimmed.match(/Destination:\s*["']?([^"'\r\n]+)["']?/i);
     if (destMatch && destMatch[1]) {
         const p = destMatch[1].trim();
-        if (!/\.f\d+\.[a-zA-Z0-9]+$/i.test(p)) {
+        // Skip partial stream fragment files
+        if (!/\.f\d+\.[a-zA-Z0-9]+$/i.test(p) && !/\.part$/i.test(p) && !/\.ytdl$/i.test(p)) {
             return p;
         }
     }
 
+    // 3. Already downloaded
     const alreadyMatch = trimmed.match(/\[download\]\s+([^"'\r\n]+)\s+has already been downloaded/i);
     if (alreadyMatch && alreadyMatch[1]) {
         return alreadyMatch[1].trim();
@@ -311,7 +337,7 @@ export const startDownload = async ({
         return;
     }
 
-    const downloadFolder = await downloadDir();
+    const downloadFolder = await resolveDownloadDir();
 
     setCurrentLog("Preparing download...");
     const ffmpegDir = await resolveFfmpegDir();
@@ -438,6 +464,7 @@ export const startDownload = async ({
     };
     const totalPlaylistItems = isPlaylist && selectedItems.length > 0 ? selectedItems.length : 1;
     const capturedPaths: string[] = [];
+    const deletedPaths = new Set<string>();
     const trackedFiles = new Set<string>();
     const completedFiles = new Set<string>();
     let detectedPlaylistFolder: string | null = null;
@@ -464,20 +491,53 @@ export const startDownload = async ({
         activeCleanupRef.current = cleanupAbortedFiles;
     }
 
-    const recordDownloadHistory = () => {
+    const recordDownloadHistory = async () => {
         try {
-            if (capturedPaths.length > 0) {
-                const firstPath = capturedPaths[0];
-                const normalized = firstPath.replace(/\\/g, "/");
+            // Filter out files yt-dlp deleted (e.g. temporary streams or intermediate conversion files)
+            const activePaths = capturedPaths.filter((p) => {
+                const norm = p.replace(/\\/g, "/");
+                return (
+                    !deletedPaths.has(p) &&
+                    !deletedPaths.has(norm) &&
+                    !p.endsWith(".part") &&
+                    !p.endsWith(".ytdl") &&
+                    !/\.f\d+\.[a-zA-Z0-9]+$/i.test(p)
+                );
+            });
+
+            // Evaluate candidate paths in reverse order (final output of pipeline is produced last)
+            const candidates = activePaths.length > 0 ? [...activePaths].reverse() : [...capturedPaths].reverse();
+
+            let chosenPath: string | null = null;
+            for (const cand of candidates) {
+                const fullCand = cand.startsWith("/") || /^[a-zA-Z]:[/\\]/.test(cand)
+                    ? cand
+                    : `${downloadFolder}/${cand}`;
+                const st = await checkFileDiskStatus(fullCand);
+                if (st.exists) {
+                    chosenPath = st.resolved_path || fullCand;
+                    break;
+                }
+            }
+
+            if (!chosenPath && candidates.length > 0) {
+                const cand = candidates[0];
+                chosenPath = cand.startsWith("/") || /^[a-zA-Z]:[/\\]/.test(cand)
+                    ? cand
+                    : `${downloadFolder}/${cand}`;
+            }
+
+            if (chosenPath) {
+                const normalized = chosenPath.replace(/\\/g, "/");
                 const normDownload = downloadFolder.replace(/\\/g, "/").replace(/\/+$/, "");
                 const lastSlash = normalized.lastIndexOf("/");
                 const parentDir = lastSlash !== -1 ? normalized.slice(0, lastSlash) : "";
 
-                // A valid playlist folder MUST be a subfolder strictly inside Downloads, never Downloads itself!
+                // Case-insensitive comparison for Windows drive letters and paths
                 const isRealPlaylistFolder =
                     isPlaylist &&
                     parentDir.length > normDownload.length &&
-                    parentDir.startsWith(normDownload);
+                    parentDir.toLowerCase().startsWith(normDownload.toLowerCase());
 
                 if (isRealPlaylistFolder) {
                     const folderName = parentDir.split("/").pop() || "Playlist";
@@ -506,7 +566,7 @@ export const startDownload = async ({
                         format,
                         selectedFormat,
                         quality: format === "video" ? (availableFormats.find(f => f.id === selectedFormat)?.height ? `${availableFormats.find(f => f.id === selectedFormat)?.height}p` : undefined) : undefined,
-                        filePath: firstPath,
+                        filePath: chosenPath,
                         fileName,
                         isPlaylist: false,
                     });
@@ -533,6 +593,16 @@ export const startDownload = async ({
                     capturedPaths.push(detected);
                 }
 
+                if (line.includes("Deleting original file")) {
+                    const delMatch = line.match(/Deleting original file\s*["']?([^"'\r\n]+)["']?/i);
+                    if (delMatch && delMatch[1]) {
+                        const delPath = delMatch[1].trim();
+                        deletedPaths.add(delPath);
+                        deletedPaths.add(delPath.replace(/\\/g, "/"));
+                        deletedPaths.add(delPath.replace(/\//g, "\\"));
+                    }
+                }
+
                 const linePaths = extractAllFilePathsFromLine(line);
                 for (const lp of linePaths) {
                     const candidates = getCandidateFilePaths(lp);
@@ -546,7 +616,7 @@ export const startDownload = async ({
                         const lastSlash = normP.lastIndexOf("/");
                         if (lastSlash !== -1) {
                             const parentDir = normP.slice(0, lastSlash);
-                            if (parentDir.length > normDl.length && parentDir.startsWith(normDl)) {
+                            if (parentDir.length > normDl.length && parentDir.toLowerCase().startsWith(normDl.toLowerCase())) {
                                 detectedPlaylistFolder = parentDir;
                             }
                         }
@@ -615,7 +685,7 @@ export const startDownload = async ({
             }
 
             if (exitCode === 0) {
-                recordDownloadHistory();
+                await recordDownloadHistory();
                 setStatus("success");
                 setUrl("");
                 const endTime = Date.now();
@@ -650,7 +720,7 @@ export const startDownload = async ({
                         return;
                     }
                     if (retryCode === 0) {
-                        recordDownloadHistory();
+                        await recordDownloadHistory();
                         setStatus("success");
                         setUrl("");
                         const endTime = Date.now();

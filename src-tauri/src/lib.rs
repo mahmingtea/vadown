@@ -780,24 +780,110 @@ pub struct FileStatus {
     pub exists: bool,
     pub is_dir: bool,
     pub size: Option<u64>,
+    pub resolved_path: Option<String>,
+}
+
+fn get_system_download_dir(app: &tauri::AppHandle) -> std::path::PathBuf {
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(user_profile) = std::env::var("USERPROFILE") {
+            let p = std::path::PathBuf::from(user_profile).join("Downloads");
+            if p.exists() {
+                return p;
+            }
+        }
+    }
+    app.path().download_dir().unwrap_or_else(|_| {
+        #[cfg(target_os = "windows")]
+        {
+            if let Ok(user_profile) = std::env::var("USERPROFILE") {
+                return std::path::PathBuf::from(user_profile).join("Downloads");
+            }
+        }
+        std::path::PathBuf::from(".")
+    })
+}
+
+fn resolve_existing_variant(path: &std::path::Path) -> Option<std::path::PathBuf> {
+    if path.exists() {
+        return Some(path.to_path_buf());
+    }
+
+    let parent = path.parent()?;
+    let stem = path.file_stem()?.to_str()?;
+
+    let mut clean_stem = stem
+        .trim_end_matches(".part")
+        .trim_end_matches(".ytdl");
+
+    if let Some(idx) = clean_stem.rfind('.') {
+        let suffix = &clean_stem[idx + 1..];
+        if suffix.chars().all(|c| c.is_ascii_digit())
+            || (suffix.starts_with('f') && suffix[1..].chars().all(|c| c.is_ascii_digit()))
+        {
+            clean_stem = &clean_stem[..idx];
+        }
+    }
+
+    let candidates = [
+        "mp4", "mp3", "m4a", "webm", "mkv", "wav", "flac", "opus", "aac",
+    ];
+
+    for ext in &candidates {
+        let candidate = parent.join(format!("{clean_stem}.{ext}"));
+        if candidate.exists() {
+            return Some(candidate);
+        }
+    }
+
+    None
 }
 
 #[tauri::command]
-fn check_file_status(path: String) -> FileStatus {
-    let p = std::path::Path::new(&path);
-    if p.exists() {
-        if p.is_dir() {
+fn get_download_dir(app: tauri::AppHandle) -> Result<String, String> {
+    let dir = get_system_download_dir(&app);
+    Ok(dir.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+fn check_file_status(app: tauri::AppHandle, path: String) -> FileStatus {
+    let clean = path.trim().trim_end_matches(['/', '\\']);
+    let mut p = std::path::PathBuf::from(clean);
+    if !p.is_absolute() {
+        p = get_system_download_dir(&app).join(&p);
+    }
+
+    let (exists, final_path) = if p.exists() {
+        (true, p.clone())
+    } else if let Some(resolved) = resolve_existing_variant(&p) {
+        (true, resolved)
+    } else {
+        (false, p.clone())
+    };
+
+    if exists {
+        if final_path.is_dir() {
             FileStatus {
                 exists: true,
                 is_dir: true,
                 size: None,
+                resolved_path: if final_path != std::path::Path::new(clean) {
+                    Some(final_path.to_string_lossy().to_string())
+                } else {
+                    None
+                },
             }
         } else {
-            let size = std::fs::metadata(p).map(|m| m.len()).ok();
+            let size = std::fs::metadata(&final_path).map(|m| m.len()).ok();
             FileStatus {
                 exists: true,
                 is_dir: false,
                 size,
+                resolved_path: if final_path != std::path::Path::new(clean) {
+                    Some(final_path.to_string_lossy().to_string())
+                } else {
+                    None
+                },
             }
         }
     } else {
@@ -805,23 +891,32 @@ fn check_file_status(path: String) -> FileStatus {
             exists: false,
             is_dir: false,
             size: None,
+            resolved_path: None,
         }
     }
 }
 
 #[tauri::command]
-fn reveal_in_folder(path: String) -> Result<(), String> {
+fn reveal_in_folder(app: tauri::AppHandle, path: String) -> Result<(), String> {
     let clean_path = path.trim().trim_end_matches(['/', '\\']);
-    let p = std::path::Path::new(clean_path);
+    let mut p = std::path::PathBuf::from(clean_path);
+    if !p.is_absolute() {
+        p = get_system_download_dir(&app).join(&p);
+    }
+
     if !p.exists() {
-        return Err("File or folder does not exist on disk".into());
+        if let Some(resolved) = resolve_existing_variant(&p) {
+            p = resolved;
+        } else {
+            return Err("File or folder does not exist on disk".into());
+        }
     }
 
     #[cfg(target_os = "macos")]
     {
         std::process::Command::new("open")
             .arg("-R")
-            .arg(p)
+            .arg(&p)
             .spawn()
             .map_err(|e| format!("Failed to reveal in Finder: {e}"))?;
     }
@@ -831,9 +926,10 @@ fn reveal_in_folder(path: String) -> Result<(), String> {
         let mut cmd = std::process::Command::new("explorer");
         prevent_cmd_window(&mut cmd);
         if p.is_dir() {
-            cmd.arg(p);
+            cmd.arg(&p);
         } else {
-            cmd.arg("/select,").arg(p);
+            // Windows Explorer requires /select,<path> as a single argument without spaces
+            cmd.arg(format!("/select,{}", p.display()));
         }
         cmd.spawn()
             .map_err(|e| format!("Failed to reveal in Explorer: {e}"))?;
@@ -841,7 +937,7 @@ fn reveal_in_folder(path: String) -> Result<(), String> {
 
     #[cfg(target_os = "linux")]
     {
-        let target = if p.is_dir() { p } else { p.parent().unwrap_or(p) };
+        let target = if p.is_dir() { &p } else { p.parent().unwrap_or(&p) };
         std::process::Command::new("xdg-open")
             .arg(target)
             .spawn()
@@ -863,35 +959,33 @@ fn open_download_folder(app: tauri::AppHandle, path: Option<String>) -> Result<(
                 p.parent().map(|parent| parent.to_path_buf()).unwrap_or(p)
             }
         } else {
-            app.path().download_dir().map_err(|e| e.to_string())?
+            get_system_download_dir(&app)
         }
     } else {
-        app.path().download_dir().map_err(|e| e.to_string())?
+        get_system_download_dir(&app)
     };
-
-    let canonical = std::fs::canonicalize(&target_dir).unwrap_or(target_dir);
 
     #[cfg(target_os = "windows")]
     {
         let mut cmd = std::process::Command::new("explorer");
         prevent_cmd_window(&mut cmd);
-        cmd.arg(&canonical);
+        // Do NOT use canonicalize on Windows as it adds \\?\ prefix which explorer.exe rejects
+        cmd.arg(&target_dir);
         cmd.spawn().map_err(|e| format!("Failed to open Explorer: {e}"))?;
     }
 
     #[cfg(target_os = "macos")]
     {
         std::process::Command::new("open")
-            .arg(&canonical)
+            .arg(&target_dir)
             .spawn()
             .map_err(|e| format!("Failed to open in Finder: {e}"))?;
     }
 
     #[cfg(target_os = "linux")]
     {
-        let target = if canonical.is_dir() { &canonical } else { canonical.parent().unwrap_or(&canonical) };
         std::process::Command::new("xdg-open")
-            .arg(target)
+            .arg(&target_dir)
             .spawn()
             .map_err(|e| format!("Failed to open folder: {e}"))?;
     }
@@ -912,7 +1006,7 @@ fn delete_file_from_disk(app: tauri::AppHandle, path: String) -> Result<(), Stri
     };
 
     // 1. Critical directory blacklists
-    let download_dir = app.path().download_dir().ok();
+    let download_dir = Some(get_system_download_dir(&app));
     let home_dir = app.path().home_dir().ok();
     let desktop_dir = app.path().desktop_dir().ok();
     let document_dir = app.path().document_dir().ok();
@@ -977,7 +1071,7 @@ fn delete_empty_dir_if_exists(app: tauri::AppHandle, path: String) -> Result<boo
         Err(_) => p.to_path_buf(),
     };
 
-    let download_dir = app.path().download_dir().ok();
+    let download_dir = Some(get_system_download_dir(&app));
     if let Some(dl_dir) = download_dir {
         let canon_dl = std::fs::canonicalize(&dl_dir).unwrap_or(dl_dir);
         if !canonical_p.starts_with(&canon_dl) || canonical_p == canon_dl {
@@ -1034,6 +1128,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             kill_process,
             get_exe_dir,
+            get_download_dir,
             check_ytdlp_update,
             install_ytdlp_update,
             setup_js_runtime,

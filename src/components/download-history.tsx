@@ -10,6 +10,7 @@ import {
   deleteFileFromDisk,
 } from "@/lib/history";
 import { openPath } from "@tauri-apps/plugin-opener";
+import { invoke } from "@tauri-apps/api/core";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -120,7 +121,11 @@ export default function DownloadHistory({ onRedownload }: DownloadHistoryProps) 
   const handleOpenFile = async (item: DownloadHistoryItem) => {
     setActionError(null);
     try {
-      await openPath(item.filePath);
+      if (item.isPlaylist) {
+        await invoke("open_download_folder", { path: item.filePath });
+      } else {
+        await openPath(item.filePath);
+      }
     } catch (err) {
       console.error("Failed to open path:", err);
       setActionError(`Could not open: ${String(err)}`);

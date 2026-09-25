@@ -23,6 +23,7 @@ export interface DiskStatus {
   exists: boolean;
   is_dir: boolean;
   size?: number;
+  resolved_path?: string;
 }
 
 const STORAGE_KEY = "vadown_download_history";
@@ -174,18 +175,40 @@ export async function batchCheckDiskStatus(
   items: DownloadHistoryItem[]
 ): Promise<Record<string, DiskStatus>> {
   const results: Record<string, DiskStatus> = {};
+  let historyNeedsUpdate = false;
+  const updatedItems = [...items];
+
   await Promise.all(
-    items.map(async (item) => {
+    items.map(async (item, index) => {
       try {
         const status = await invoke<DiskStatus>("check_file_status", {
           path: item.filePath,
         });
         results[item.id] = status;
+
+        if (status.exists && status.resolved_path && status.resolved_path !== item.filePath) {
+          const normResolved = status.resolved_path.replace(/\\/g, "/");
+          const normOld = item.filePath.replace(/\\/g, "/");
+          if (normResolved.toLowerCase() !== normOld.toLowerCase()) {
+            const newFileName = normResolved.split("/").pop() || item.fileName;
+            updatedItems[index] = {
+              ...item,
+              filePath: status.resolved_path,
+              fileName: item.isPlaylist ? item.fileName : newFileName,
+            };
+            historyNeedsUpdate = true;
+          }
+        }
       } catch {
         results[item.id] = { exists: false, is_dir: item.isPlaylist };
       }
     })
   );
+
+  if (historyNeedsUpdate) {
+    saveHistory(updatedItems);
+  }
+
   return results;
 }
 
